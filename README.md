@@ -1,1 +1,1 @@
-creating a shell
+group project to create a simple shell
