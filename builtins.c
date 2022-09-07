@@ -1,100 +1,157 @@
-#include "main.h"
+#include "shell.h"
 
 /**
- * cd_b - Changes the current working directory to the parameter passed to cd.
- * if no parameter is passed it will change directory to HOME.
- * @line: A string representing the input from the user.
+ * check_for_builtins - checks if the command is a builtin
+ * @vars: variables
+ * Return: pointer to the function or NULL
  */
-void cd_b(char *line)
+void (*check_for_builtins(vars_t *vars))(vars_t *vars)
 {
-int index;
-int token_count;
-char **param_array;
-const char *delim = "\n\t ";
-token_count = 0;
-param_array = token_interface(line, delim, token_count);
-if (param_array[0] == NULL)
-{
-single_free(2, param_array, line);
-return;
-}
-if (param_array[1] == NULL)
-{
-index = find_path("HOME");
-chdir((environ[index]) + 5);
-}
-else if (_strcmp(param_array[1], "-") == 0)
-print_str(param_array[1], 0);
-else
-chdir(param_array[1]);
-double_free(param_array);
+	unsigned int i;
+	builtins_t check[] = {
+		{"exit", new_exit},
+		{"env", _env},
+		{"setenv", new_setenv},
+		{"unsetenv", new_unsetenv},
+		{NULL, NULL}
+	};
+
+	for (i = 0; check[i].f != NULL; i++)
+	{
+		if (_strcmpr(vars->av[0], check[i].name) == 0)
+			break;
+	}
+	if (check[i].f != NULL)
+		check[i].f(vars);
+	return (check[i].f);
 }
 
 /**
- * env_b - Prints all the environmental variables in the current shell.
- * @line: A string representing the input from the user.
+ * new_exit - exit program
+ * @vars: variables
+ * Return: void
  */
-void env_b(__attribute__((unused))char *line)
+void new_exit(vars_t *vars)
 {
-int i;
-int j;
-for (i = 0; environ[i] != NULL; i++)
-{
-for (j = 0; environ[i][j] != '\0'; j++)
-write(STDOUT_FILENO, &environ[i][j], 1);
-write(STDOUT_FILENO, "\n", 1);
-}
+	int status;
+
+	if (_strcmpr(vars->av[0], "exit") == 0 && vars->av[1] != NULL)
+	{
+		status = _atoi(vars->av[1]);
+		if (status == -1)
+		{
+			vars->status = 2;
+			print_error(vars, ": Illegal number: ");
+			_puts2(vars->av[1]);
+			_puts2("\n");
+			free(vars->commands);
+			vars->commands = NULL;
+			return;
+		}
+		vars->status = status;
+	}
+	free(vars->buffer);
+	free(vars->av);
+	free(vars->commands);
+	free_env(vars->env);
+	exit(vars->status);
 }
 
 /**
- * exit_b - Exits the shell. After freeing allocated resources.
- * @line: A string representing the input from the user.
+ * _env - prints the current environment
+ * @vars: struct of variables
+ * Return: void.
  */
-void exit_b(char *line)
+void _env(vars_t *vars)
 {
-free(line);
-print_str("\n", 1);
-exit(1);
+	unsigned int i;
+
+	for (i = 0; vars->env[i]; i++)
+	{
+		_puts(vars->env[i]);
+		_puts("\n");
+	}
+	vars->status = 0;
 }
 
 /**
- * check_built_ins - Finds the right function needed for execution.
- * @str: The name of the function that is needed.
- * Return: Upon sucess a pointer to a void function. Otherwise NULL.
+ * new_setenv - create a new environment variable, or edit an existing variable
+ * @vars: pointer to struct of variables
+ *
+ * Return: void
  */
-void (*check_built_ins(char *str))(char *str)
+void new_setenv(vars_t *vars)
 {
-int i;
-builtin_t buildin[] = {
-{"exit", exit_b},
-{"env", env_b},
-{"cd", cd_b},
-{NULL, NULL}
-};
-for (i = 0; buildin[i].built != NULL; i++)
-{
-if (_strcmp(str, buildin[i].built) == 0)
-{
-return (buildin[i].f);
-}
-}
-return (NULL);
+	char **key;
+	char *var;
+
+	if (vars->av[1] == NULL || vars->av[2] == NULL)
+	{
+		print_error(vars, ": Incorrect number of arguments\n");
+		vars->status = 2;
+		return;
+	}
+	key = find_key(vars->env, vars->av[1]);
+	if (key == NULL)
+		add_key(vars);
+	else
+	{
+		var = add_value(vars->av[1], vars->av[2]);
+		if (var == NULL)
+		{
+			print_error(vars, NULL);
+			free(vars->buffer);
+			free(vars->commands);
+			free(vars->av);
+			free_env(vars->env);
+			exit(127);
+		}
+		free(*key);
+		*key = var;
+	}
+	vars->status = 0;
 }
 
 /**
- * built_in - Checks for builtin functions.
- * @command: An array of all the arguments passed to the shell.
- * @line: A string representing the input from the user.
- * Return: If function is found 0. Otherwise -1.
+ * new_unsetenv - remove an environment variable
+ * @vars: pointer to a struct of variables
+ *
+ * Return: void
  */
-int built_in(char **command, char *line)
+void new_unsetenv(vars_t *vars)
 {
-void (*build)(char *);
-build = check_built_ins(command[0]);
-if (build == NULL)
-return (-1);
-if (_strcmp("exit", command[0]) == 0)
-double_free(command);
-build(line);
-return (0);
+	char **key, **newenv;
+
+	unsigned int i, j;
+
+	if (vars->av[1] == NULL)
+	{
+		print_error(vars, ": Incorrect number of arguments\n");
+		vars->status = 2;
+		return;
+	}
+	key = find_key(vars->env, vars->av[1]);
+	if (key == NULL)
+	{
+		print_error(vars, ": No variable to unset");
+		return;
+	}
+	for (i = 0; vars->env[i] != NULL; i++)
+		;
+	newenv = malloc(sizeof(char *) * i);
+	if (newenv == NULL)
+	{
+		print_error(vars, NULL);
+		vars->status = 127;
+		new_exit(vars);
+	}
+	for (i = 0; vars->env[i] != *key; i++)
+		newenv[i] = vars->env[i];
+	for (j = i + 1; vars->env[j] != NULL; j++, i++)
+		newenv[i] = vars->env[j];
+	newenv[i] = NULL;
+	free(*key);
+	free(vars->env);
+	vars->env = newenv;
+	vars->status = 0;
 }
